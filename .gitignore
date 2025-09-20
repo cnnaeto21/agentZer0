@@ -1,0 +1,110 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# SECURITY CRITICAL: Environment variables and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+.secrets/
+
+# API Keys and Tokens (various naming patterns)
+*_token
+*_key
+*_secret
+api_keys.txt
+credentials.json
+service-account*.json
+
+# Model files and data (can be large and sometimes contain sensitive info)
+models/
+*.bin
+*.safetensors
+*.pth
+*.ckpt
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Logs (may contain sensitive debug info)
+logs/
+*.log
+wandb/
+.wandb/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Cache directories
+cache/
+.cache/
+.pytest_cache/
+
+# Jupyter notebooks (may contain API keys in outputs)
+.ipynb_checkpoints/
+*.ipynb
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# Database files (may contain sensitive data)
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Configuration files that might contain secrets
+config.ini
+config.yaml
+config.json
+settings.local.*
+
+# Docker secrets
+docker-compose.override.yml
+.dockerignore
