@@ -108,3 +108,7 @@ settings.local.*
 # Docker secrets
 docker-compose.override.yml
 .dockerignore
+
+exec -l
+google-cloud-sdk/
+google-cloud-sdk.tar.gz

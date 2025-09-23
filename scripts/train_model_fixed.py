@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
-Fixed training script with better save handling for Llama model.
+Fixed training script with consistent device handling and proper configuration.
 """
 
 import os
 import sys
 import argparse
 from pathlib import Path
+
+# Set environment variables before importing torch
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent / "src"))
@@ -25,10 +29,32 @@ import pandas as pd
 from dotenv import load_dotenv
 import wandb
 
+# Force disable MPS when using --force-cpu (after torch import)
+if "--force-cpu" in sys.argv:
+    torch.backends.mps.is_available = lambda: False
+    print("MPS disabled due to --force-cpu flag")
+
 load_dotenv()
 
-device = "cpu"  # Force CPU training
-print("Using CPU for training (more stable)")
+def determine_device():
+    """Determine the best available device and return configuration."""
+    if torch.cuda.is_available():
+        device = "cuda"
+        dtype = torch.float16
+        fp16_enabled = True
+        print(f"✓ Using CUDA: {torch.cuda.get_device_name(0)}")
+    elif torch.backends.mps.is_available():
+        device = "mps" 
+        dtype = torch.float32  # MPS works better with float32
+        fp16_enabled = False
+        print("✓ Using MPS (Apple Silicon)")
+    else:
+        device = "cpu"
+        dtype = torch.float32
+        fp16_enabled = False
+        print("Using CPU (training will be slower but stable)")
+    
+    return device, dtype, fp16_enabled
 
 def setup_wandb(config_dict):
     """Initialize Weights & Biases tracking."""
@@ -47,6 +73,19 @@ def setup_wandb(config_dict):
         return False
 
 def main():
+    # Parse arguments FIRST
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-path", default="data/raw/enterprise_agent_training_data.csv")
+    parser.add_argument("--force-cpu", action="store_true", help="Force CPU training")
+    args = parser.parse_args()
+    
+    # THEN determine device configuration (respecting force-cpu flag)
+    if args.force_cpu:
+        device, dtype, fp16_enabled = "cpu", torch.float32, False
+        print("Forced CPU training mode")
+    else:
+        device, dtype, fp16_enabled = determine_device()
+    
     # Clean up any existing models directory
     models_dir = Path("./models")
     if models_dir.exists():
@@ -56,10 +95,6 @@ def main():
     
     models_dir.mkdir(parents=True, exist_ok=True)
     
-    # Parse arguments
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data-path", default="data/raw/enterprise_agent_training_data.csv")
-    args = parser.parse_args()
     data_path = args.data_path
     
     if not os.path.exists(data_path):
@@ -76,6 +111,20 @@ def main():
     # Model configuration
     model_name = "meta-llama/Llama-3.1-8B-Instruct"
     
+    # Adjust batch size based on device
+    if device == "cpu":
+        batch_size = 1
+        gradient_accumulation_steps = 8
+        max_length = 256
+    elif device == "mps":
+        batch_size = 2
+        gradient_accumulation_steps = 4
+        max_length = 512
+    else:  # cuda
+        batch_size = 4
+        gradient_accumulation_steps = 2
+        max_length = 512
+    
     # Create config dict with all necessary info
     config_dict = {
         "model_name": model_name,
@@ -85,9 +134,12 @@ def main():
         "lora_r": 16,
         "lora_alpha": 32,
         "learning_rate": 2e-5,
-        "batch_size": 2,
+        "batch_size": batch_size,
         "epochs": 2,
-        "max_length": 512
+        "max_length": max_length,
+        "device": device,
+        "dtype": str(dtype),
+        "fp16_enabled": fp16_enabled
     }
 
     # Initialize W&B
@@ -102,17 +154,33 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     
     print(f"Loading model from {model_name}")
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_name,
-        num_labels=2,
-        token=os.getenv('HF_TOKEN'),
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-        low_cpu_mem_usage=True
-    )
-    
-    if torch.cuda.is_available():
-        model = model.to("cuda")
-        print("✓ Model moved to CUDA")
+    try:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            num_labels=2,
+            token=os.getenv('HF_TOKEN'),
+            torch_dtype=dtype,
+            low_cpu_mem_usage=True
+        )
+        
+        # Move model to appropriate device
+        model = model.to(device)
+        print(f"✓ Model loaded and moved to {device}")
+        
+    except Exception as e:
+        print(f"✗ Error loading model: {e}")
+        if device != "cpu":
+            print("Falling back to CPU...")
+            device, dtype, fp16_enabled = "cpu", torch.float32, False
+            model = AutoModelForSequenceClassification.from_pretrained(
+                model_name,
+                num_labels=2,
+                token=os.getenv('HF_TOKEN'),
+                torch_dtype=torch.float32
+            )
+            print("✓ Model loaded on CPU (fallback)")
+        else:
+            raise
     
     print("Setting up LoRA...")
     lora_config = LoraConfig(
@@ -130,7 +198,9 @@ def main():
     # Prepare datasets
     train_df = df.sample(frac=0.8, random_state=42)
     eval_df = df.drop(train_df.index)
-    
+    train_df_renamed = train_df.rename(columns={"label": "labels"})
+    eval_df_renamed = eval_df.rename(columns={"label": "labels"})
+
     def tokenize_function(examples):
         return tokenizer(
             examples["text"],
@@ -138,26 +208,26 @@ def main():
             padding=True,
             max_length=config_dict["max_length"]
         )
-    
+
     print("Tokenizing datasets...")
-    train_dataset = Dataset.from_pandas(train_df).map(
+    train_dataset = Dataset.from_pandas(train_df_renamed).map(  # Use renamed version
         tokenize_function, 
         batched=True,
-        remove_columns=["text", "label", "source", "attack_type", "severity"]
+        remove_columns=["text", "source", "attack_type", "severity"]  # Now keeps "labels"
     )
-    eval_dataset = Dataset.from_pandas(eval_df).map(
+    eval_dataset = Dataset.from_pandas(eval_df_renamed).map(   # Use renamed version
         tokenize_function, 
         batched=True,
-        remove_columns=["text", "label", "source", "attack_type", "severity"]
+        remove_columns=["text", "source", "attack_type", "severity"]  # Now keeps "labels"
     )
     
-    # Training arguments
+    # Training arguments with device-appropriate settings
     training_args = TrainingArguments(
         output_dir=str(models_dir),
         num_train_epochs=config_dict["epochs"],
         per_device_train_batch_size=config_dict["batch_size"],
         per_device_eval_batch_size=config_dict["batch_size"],
-        gradient_accumulation_steps=4,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         warmup_steps=100,
         weight_decay=0.01,
         learning_rate=config_dict["learning_rate"],
@@ -165,14 +235,15 @@ def main():
         logging_steps=50,
         eval_strategy="steps",
         eval_steps=200,
-        save_steps=400,
+        save_steps=400,  # Compatible with eval_steps
         save_total_limit=2,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        fp16=False,
+        fp16=fp16_enabled,
         dataloader_drop_last=False,
         remove_unused_columns=True,
+        dataloader_pin_memory=(device == "cuda"),  # Only pin memory for CUDA
         report_to="wandb" if wandb_enabled else None,
     )
     
@@ -188,7 +259,10 @@ def main():
     
     # Train
     try:
-        print("Starting training...")
+        print(f"Starting training on {device}...")
+        if device == "cpu":
+            print("Note: CPU training will take 30-45 minutes")
+        
         train_result = trainer.train()
         print("✓ Training completed successfully")
         
@@ -220,8 +294,9 @@ def main():
             model.eval()
             for text, expected in test_prompts:
                 inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
-                if torch.cuda.is_available():
-                    inputs = {k: v.to("cuda") for k, v in inputs.items()}
+                
+                # Move inputs to same device as model
+                inputs = {k: v.to(device) for k, v in inputs.items()}
                 
                 with torch.no_grad():
                     outputs = model(**inputs)
