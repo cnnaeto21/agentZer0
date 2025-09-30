@@ -109,6 +109,6 @@ settings.local.*
 docker-compose.override.yml
 .dockerignore
 
-exec -l
+exec -l*
 google-cloud-sdk/
 google-cloud-sdk.tar.gz

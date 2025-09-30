@@ -57,7 +57,7 @@ class Tier1AcademicCollector:
         try:
             # Method 1: Try Hugging Face datasets library (preferred)
             logger.info("  Attempting Hugging Face datasets API...")
-            dataset = load_dataset("microsoft/llmail-inject-challenge", split="train")
+            dataset = load_dataset("microsoft/llmail-inject-challenge", split="Phase1")
             
             # Convert to pandas for easier processing
             df = dataset.to_pandas()
@@ -220,12 +220,14 @@ class Tier1AcademicCollector:
         try:
             # Method 1: Try Hugging Face datasets
             logger.info("  Attempting TrustAIRLab via Hugging Face...")
-            dataset = load_dataset("TrustAIRLab/jailbreak_llms", split="train")
+            dataset = load_dataset("TrustAIRLab/in-the-wild-jailbreak-prompts", "jailbreak_2023_05_07", split="train")
             
             df = dataset.to_pandas()
+
             logger.info(f"  Downloaded {len(df)} examples via HF datasets")
             
             processed_data = self._process_trustairlab_data(df)
+                
             
             self.stats['collected_by_source']['trustairlab_jailbreaks'] = len(processed_data)
             logger.info(f"✓ TrustAIRLab: {len(processed_data)} examples processed")
@@ -242,34 +244,40 @@ class Tier1AcademicCollector:
     
     def _process_trustairlab_data(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
         """Process TrustAIRLab data into standardized format."""
-        processed_data = []
         
-        for _, row in df.iterrows():
+        # Filter DataFrame before iterating
+        df_jailbreaks = df[df['jailbreak'] == True].copy()
+        logger.info(f"  Found {len(df_jailbreaks)} jailbreak examples out of {len(df)} total rows")
+        
+        # Filter by text length
+        df_jailbreaks['text_length'] = df_jailbreaks['prompt'].str.len()
+        df_jailbreaks = df_jailbreaks[df_jailbreaks['text_length'] >= 20]
+        logger.info(f"  After filtering by length: {len(df_jailbreaks)} examples remain")
+        
+        processed_data = []
+        for idx, row in df_jailbreaks.iterrows():
             try:
-                # Extract jailbreak text
-                text = str(row.get('jailbreak', row.get('prompt', row.get('text', '')))).strip()
-                
-                if len(text) < 20:
-                    continue
-                
-                # Classify jailbreak type
+                text = str(row['prompt']).strip()
                 attack_type = self._classify_jailbreak_type(text)
                 severity = self._assess_jailbreak_severity(text)
                 
                 processed_data.append({
                     'text': text,
-                    'label': 1,  # All jailbreaks are attacks
+                    'label': 1,
                     'source': 'academic_trustairlab',
                     'attack_type': attack_type,
                     'severity': severity,
                     'metadata': {
                         'real_world_source': True,
-                        'community_generated': True
+                        'community_generated': True,
+                        'platform': row.get('platform', 'unknown'),
+                        'source_type': row.get('source', 'unknown'),
+                        'created_at': row.get('created_at', None)
                     }
                 })
                 
             except Exception as e:
-                logger.debug(f"Error processing TrustAIRLab row: {e}")
+                logger.warning(f"Error processing row {idx}: {e}")
                 continue
         
         return processed_data
