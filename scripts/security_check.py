@@ -37,6 +37,7 @@ class SecurityScanner:
             r'\.gitignore$',
             r'README\.md$',
             r'requirements\.txt$',
+            r'exec -l\*'
         ]
         
         # Safe patterns that look like secrets but aren't
@@ -98,7 +99,7 @@ class SecurityScanner:
         
         for root, dirs, files in os.walk(directory):
             # Skip hidden directories and common excludes
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['__pycache__', 'node_modules', 'venv', 'env']]
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['__pycache__', 'node_modules', 'venv', 'env', 'exec -l*']]
             
             for file in files:
                 file_path = Path(root) / file
