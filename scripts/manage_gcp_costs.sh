@@ -12,7 +12,7 @@ else
     # Default values
     PROJECT_ID="agentzero-prompt-security"
     INSTANCE_NAME="agentzero-trainer"
-    ACTIVE_ZONE="us-west1-b"
+    ACTIVE_ZONE="us-central1-a"
 fi
 
 ACTION=${1:-"help"}
