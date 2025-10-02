@@ -22,6 +22,7 @@ from io import StringIO
 import logging
 from datasets import load_dataset
 import os
+from sklearn.model_selection import train_test_split
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -214,56 +215,108 @@ class Tier1AcademicCollector:
         return processed_fallback
     
     def collect_trustairlab_jailbreaks(self) -> List[Dict[str, Any]]:
-        """Collect TrustAIRLab real-world jailbreak data."""
-        logger.info("Collecting TrustAIRLab jailbreak dataset...")
+        """Collect TrustAIRLab jailbreak AND safe prompt data."""
+        logger.info("Collecting TrustAIRLab dataset (attacks + safe)...")
         
-        try:
-            # Method 1: Try Hugging Face datasets
-            logger.info("  Attempting TrustAIRLab via Hugging Face...")
-            dataset = load_dataset("TrustAIRLab/in-the-wild-jailbreak-prompts", "jailbreak_2023_05_07", split="train")
-            
-            df = dataset.to_pandas()
-
-            logger.info(f"  Downloaded {len(df)} examples via HF datasets")
-            
-            processed_data = self._process_trustairlab_data(df)
+        all_data = []
+        
+        # Dataset configurations: (config_name, expected_label)
+        datasets_to_collect = [
+            # Jailbreak prompts (attacks)
+            ('jailbreak_2023_05_07', 1),
+            ('jailbreak_2023_12_25', 1),
+            # Regular prompts (safe)
+            ('regular_2023_05_07', 0),
+            ('regular_2023_12_25', 0),
+        ]
+        
+        for config_name, expected_label in datasets_to_collect:
+            try:
+                logger.info(f"  Loading {config_name}...")
+                dataset = load_dataset(
+                    "TrustAIRLab/in-the-wild-jailbreak-prompts", 
+                    config_name, 
+                    split="train"
+                )
                 
-            
-            self.stats['collected_by_source']['trustairlab_jailbreaks'] = len(processed_data)
-            logger.info(f"✓ TrustAIRLab: {len(processed_data)} examples processed")
-            
-            return processed_data
-            
-        except Exception as e:
-            logger.error(f"✗ TrustAIRLab collection failed: {e}")
-            self.stats['failed_sources'].append('trustairlab_jailbreaks')
-            
-            # Fallback: curated real-world jailbreak examples
-            logger.info("  Using curated jailbreak examples as fallback...")
+                df = dataset.to_pandas()
+                logger.info(f"    Downloaded {len(df)} raw examples")
+                
+                # Process this subset
+                processed = self._process_trustairlab_data(df, expected_label)
+                all_data.extend(processed)
+                
+                logger.info(f"    ✓ Processed {len(processed)} examples from {config_name}")
+                
+            except Exception as e:
+                logger.error(f"    ✗ Failed to load {config_name}: {e}")
+                continue
+        
+        if len(all_data) == 0:
+            logger.warning("  No data collected, using fallback...")
             return self._get_trustairlab_fallback_data()
-    
-    def _process_trustairlab_data(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
-        """Process TrustAIRLab data into standardized format."""
         
-        # Filter DataFrame before iterating
-        df_jailbreaks = df[df['jailbreak'] == True].copy()
-        logger.info(f"  Found {len(df_jailbreaks)} jailbreak examples out of {len(df)} total rows")
+        # Remove duplicates (as recommended by dataset authors)
+        df_all = pd.DataFrame(all_data)
+        initial_count = len(df_all)
+        df_all = df_all.drop_duplicates(subset=['text'], keep='first')
+        duplicates_removed = initial_count - len(df_all)
         
-        # Filter by text length
-        df_jailbreaks['text_length'] = df_jailbreaks['prompt'].str.len()
-        df_jailbreaks = df_jailbreaks[df_jailbreaks['text_length'] >= 20]
-        logger.info(f"  After filtering by length: {len(df_jailbreaks)} examples remain")
+        if duplicates_removed > 0:
+            logger.info(f"  Removed {duplicates_removed} duplicate prompts (as recommended)")
         
+        all_data = df_all.to_dict('records')
+        
+        # Stats breakdown
+        attack_count = sum(1 for d in all_data if d['label'] == 1)
+        safe_count = sum(1 for d in all_data if d['label'] == 0)
+        
+        self.stats['collected_by_source']['trustairlab_jailbreaks'] = attack_count
+        self.stats['collected_by_source']['trustairlab_safe'] = safe_count
+        
+        logger.info(f"✓ TrustAIRLab total: {len(all_data)} examples")
+        logger.info(f"  - Attacks: {attack_count}")
+        logger.info(f"  - Safe: {safe_count}")
+        
+        return all_data
+
+    def _process_trustairlab_data(self, df: pd.DataFrame, expected_label: int) -> List[Dict[str, Any]]:
+        """Process TrustAIRLab data (works for both jailbreak and regular prompts)."""
         processed_data = []
-        for idx, row in df_jailbreaks.iterrows():
+        
+        # Filter by text length first
+        df = df[df['prompt'].str.len() >= 20].copy()
+        
+        logger.info(f"    Processing {len(df)} prompts with length >= 20 chars")
+        
+        for idx, row in df.iterrows():
             try:
                 text = str(row['prompt']).strip()
-                attack_type = self._classify_jailbreak_type(text)
-                severity = self._assess_jailbreak_severity(text)
+                
+                # For jailbreak datasets, use the 'jailbreak' column if available
+                # For regular datasets, expected_label tells us it's safe
+                if 'jailbreak' in row and pd.notna(row['jailbreak']):
+                    is_jailbreak = bool(row['jailbreak'])
+                    label = 1 if is_jailbreak else 0
+                else:
+                    # Use expected_label from dataset config
+                    label = expected_label
+                
+                # Only include if label matches what we expect from this dataset
+                if label != expected_label:
+                    continue
+                
+                # Classify attack type or mark as safe
+                if label == 1:
+                    attack_type = self._classify_jailbreak_type(text)
+                    severity = self._assess_jailbreak_severity(text)
+                else:
+                    attack_type = 'none'
+                    severity = 'none'
                 
                 processed_data.append({
                     'text': text,
-                    'label': 1,
+                    'label': label,
                     'source': 'academic_trustairlab',
                     'attack_type': attack_type,
                     'severity': severity,
@@ -277,7 +330,7 @@ class Tier1AcademicCollector:
                 })
                 
             except Exception as e:
-                logger.warning(f"Error processing row {idx}: {e}")
+                logger.debug(f"Error processing row {idx}: {e}")
                 continue
         
         return processed_data
@@ -531,6 +584,58 @@ class Tier1AcademicCollector:
         
         return processed_fallback
     
+    def _balance_dataset(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Balance to 50/50 attack/safe split."""
+        logger.info("Balancing dataset to 50/50 split...")
+        
+        safe_df = df[df['label'] == 0]
+        attack_df = df[df['label'] == 1]
+        
+        logger.info(f"  Before: {len(safe_df):,} safe ({len(safe_df)/len(df)*100:.1f}%), {len(attack_df):,} attacks ({len(attack_df)/len(df)*100:.1f}%)")
+        
+        # Sample to match smaller class
+        target_per_class = min(len(safe_df), len(attack_df))
+        
+        if target_per_class < 1000:
+            logger.warning(f"  WARNING: Only {target_per_class} examples per class - dataset too small!")
+        
+        safe_sample = safe_df.sample(n=target_per_class, random_state=42)
+        attack_sample = attack_df.sample(n=target_per_class, random_state=42)
+        
+        balanced = pd.concat([safe_sample, attack_sample]).sample(frac=1, random_state=42).reset_index(drop=True)
+        
+        logger.info(f"  After: {len(safe_sample):,} safe (50%), {len(attack_sample):,} attacks (50%)")
+        
+        return balanced
+
+    
+    def _create_fixed_splits(self, df: pd.DataFrame) -> tuple:
+        """Create fixed train/val/test splits with consistent test set."""
+        logger.info("Creating fixed train/validation/test splits...")
+        
+        safe_df = df[df['label'] == 0]
+        attack_df = df[df['label'] == 1]
+        
+        # Split each class: 70% train, 15% val, 15% test
+        safe_train, safe_temp = train_test_split(safe_df, test_size=0.3, random_state=42)
+        safe_val, safe_test = train_test_split(safe_temp, test_size=0.5, random_state=42)
+        
+        attack_train, attack_temp = train_test_split(attack_df, test_size=0.3, random_state=42)
+        attack_val, attack_test = train_test_split(attack_temp, test_size=0.5, random_state=42)
+        
+        # Combine and shuffle
+        train_df = pd.concat([safe_train, attack_train]).sample(frac=1, random_state=42)
+        val_df = pd.concat([safe_val, attack_val]).sample(frac=1, random_state=42)
+        test_df = pd.concat([safe_test, attack_test]).sample(frac=1, random_state=42)
+        
+        logger.info(f"  Train: {len(train_df):,} ({len(safe_train):,} safe, {len(attack_train):,} attack)")
+        logger.info(f"  Val: {len(val_df):,} ({len(safe_val):,} safe, {len(attack_val):,} attack)")
+        logger.info(f"  Test: {len(test_df):,} ({len(safe_test):,} safe, {len(attack_test):,} attack)")
+        
+        return train_df, val_df, test_df
+    
+    
+    
     def collect_all_tier1_data(self) -> pd.DataFrame:
         """Collect all Tier 1 academic data sources."""
         start_time = time.time()
@@ -570,8 +675,12 @@ class Tier1AcademicCollector:
         df = pd.DataFrame(all_data)
         logger.info(f"Raw data collected: {len(df)} examples")
         
+        
+        
         # Data cleaning and deduplication
         df = self._clean_and_deduplicate(df)
+
+       
         
         # Update final stats
         self.stats['total_examples'] = len(all_data)
@@ -634,14 +743,30 @@ class Tier1AcademicCollector:
         return text[:1500]  # Truncate very long examples
     
     def save_tier1_dataset(self, df: pd.DataFrame) -> str:
-        """Save Tier 1 dataset with comprehensive metadata."""
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        output_path = self.output_dir / f"tier1_academic_data_{timestamp}.csv"
-        latest_path = self.output_dir / "tier1_academic_data_latest.csv"
+        """Save Tier 1 dataset with train/val/test splits and comprehensive metadata."""
         
-        # Save main dataset
-        df.to_csv(output_path, index=False, encoding='utf-8')
-        df.to_csv(latest_path, index=False, encoding='utf-8')
+        
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        
+        # Balance dataset first
+        df = self._balance_dataset(df)
+        
+        # Create fixed splits
+        train_df, val_df, test_df = self._create_fixed_splits(df)
+        
+        # Save all three splits
+        train_path = self.output_dir / f"train_{timestamp}.csv"
+        val_path = self.output_dir / f"val_{timestamp}.csv"
+        test_path = self.output_dir / f"test_{timestamp}.csv"
+        
+        train_df.to_csv(train_path, index=False, encoding='utf-8')
+        val_df.to_csv(val_path, index=False, encoding='utf-8')
+        test_df.to_csv(test_path, index=False, encoding='utf-8')
+        
+        # Save "latest" versions for convenience
+        train_df.to_csv(self.output_dir / "train_latest.csv", index=False)
+        val_df.to_csv(self.output_dir / "val_latest.csv", index=False)
+        test_df.to_csv(self.output_dir / "test_latest.csv", index=False)
         
         # Print comprehensive summary
         logger.info("")
@@ -649,28 +774,47 @@ class Tier1AcademicCollector:
         logger.info("TIER 1 ACADEMIC COLLECTION COMPLETE")
         logger.info("="*60)
         
-        logger.info(f"Dataset saved to: {output_path}")
-        logger.info(f"Total examples: {len(df):,}")
-        logger.info(f"Processing time: {self.stats['processing_time']:.1f} seconds")
+        logger.info(f"\nDatasets saved to: {self.output_dir}")
+        logger.info(f"  Train: {train_path.name}")
+        logger.info(f"  Val: {val_path.name}")
+        logger.info(f"  Test: {test_path.name}")
+        logger.info(f"\nProcessing time: {self.stats['processing_time']:.1f} seconds")
         
-        # Source breakdown
+        # Dataset size summary
+        logger.info(f"\nDATASET SIZES:")
+        logger.info(f"  Total balanced: {len(df):,} examples")
+        logger.info(f"  Train: {len(train_df):,} examples (70%)")
+        logger.info(f"  Val: {len(val_df):,} examples (15%)")
+        logger.info(f"  Test: {len(test_df):,} examples (15%)")
+        
+        # Class balance verification
+        logger.info(f"\nCLASS BALANCE:")
+        for split_name, split_df in [("Train", train_df), ("Val", val_df), ("Test", test_df)]:
+            safe = len(split_df[split_df['label'] == 0])
+            attack = len(split_df[split_df['label'] == 1])
+            logger.info(f"  {split_name}: {safe:,} safe ({safe/len(split_df)*100:.1f}%), {attack:,} attack ({attack/len(split_df)*100:.1f}%)")
+        
+        # Source breakdown (from full balanced dataset)
         logger.info(f"\nSOURCE BREAKDOWN:")
         source_counts = df['source'].value_counts()
         for source, count in source_counts.items():
             percentage = count / len(df) * 100
             logger.info(f"  {source}: {count:,} ({percentage:.1f}%)")
         
-        # Attack type breakdown
+        # Attack type breakdown (attacks only)
+        attack_df = df[df['label'] == 1]
         logger.info(f"\nATTACK TYPE BREAKDOWN:")
-        attack_counts = df['attack_type'].value_counts()
+        attack_counts = attack_df['attack_type'].value_counts()
         for attack_type, count in attack_counts.head(10).items():
-            logger.info(f"  {attack_type}: {count:,}")
+            percentage = count / len(attack_df) * 100
+            logger.info(f"  {attack_type}: {count:,} ({percentage:.1f}%)")
         
-        # Severity breakdown
-        logger.info(f"\nSEVERITY BREAKDOWN:")
-        severity_counts = df['severity'].value_counts()
+        # Severity breakdown (attacks only)
+        logger.info(f"\nATTACK SEVERITY BREAKDOWN:")
+        severity_counts = attack_df['severity'].value_counts()
         for severity, count in severity_counts.items():
-            logger.info(f"  {severity}: {count:,}")
+            percentage = count / len(attack_df) * 100
+            logger.info(f"  {severity}: {count:,} ({percentage:.1f}%)")
         
         # Collection success rate
         total_sources = len(self.stats['collected_by_source']) + len(self.stats['failed_sources'])
@@ -678,20 +822,26 @@ class Tier1AcademicCollector:
         logger.info(f"\nCOLLECTION SUCCESS RATE: {success_rate*100:.1f}%")
         
         if self.stats['failed_sources']:
-            logger.info(f"Failed sources: {', '.join(self.stats['failed_sources'])}")
+            logger.info(f"  Failed sources: {', '.join(self.stats['failed_sources'])}")
         
-        # Sample examples
-        logger.info(f"\nSAMPLE EXAMPLES:")
-        for _, row in df.head(3).iterrows():
-            logger.info(f"  [{row['attack_type']}] {row['text'][:80]}...")
+        # Sample examples from train set
+        logger.info(f"\nSAMPLE TRAINING EXAMPLES:")
+        logger.info("  Safe examples:")
+        for _, row in train_df[train_df['label'] == 0].head(2).iterrows():
+            logger.info(f"    - {row['text'][:80]}...")
+        logger.info("  Attack examples:")
+        for _, row in train_df[train_df['label'] == 1].head(2).iterrows():
+            logger.info(f"    - [{row['attack_type']}] {row['text'][:80]}...")
         
+        # Next steps guidance
         logger.info(f"\nNEXT STEPS:")
-        logger.info(f"1. Ready for Tier 2 web scraping collection")
-        logger.info(f"2. Train foundation model: python train_model.py --data-path {latest_path}")
-        logger.info(f"3. Target achieved: {len(df):,} academic examples collected")
+        logger.info(f"1. Train model: python train_model.py --train-path {self.output_dir}/train_latest.csv --val-path {self.output_dir}/val_latest.csv")
+        logger.info(f"2. Evaluate on fixed test set: python evaluate_model.py --test-path {self.output_dir}/test_latest.csv")
+        logger.info(f"3. Target: Reduce false positive rate from 50% to <5%")
         
-        return str(latest_path)
-
+        logger.info("")
+        
+        return str(train_path)
 def main():
     """Main execution for Tier 1 academic data collection."""
     print("="*60)

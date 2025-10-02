@@ -37,7 +37,10 @@ class SecurityScanner:
             r'\.gitignore$',
             r'README\.md$',
             r'requirements\.txt$',
-            r'exec -l\*'
+            r'exec\s+-l/',
+            r'exec\s-l/',
+            r'exec[\s\-]+l/',
+            r'exec\s+-l'
         ]
         
         # Safe patterns that look like secrets but aren't
