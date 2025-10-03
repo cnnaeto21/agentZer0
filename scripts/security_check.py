@@ -40,7 +40,9 @@ class SecurityScanner:
             r'exec\s+-l/',
             r'exec\s-l/',
             r'exec[\s\-]+l/',
-            r'exec\s+-l'
+            r'exec\s+-l',
+            r'\.google-cloud-sdk/',
+            r'\.google-cloud-sdk\.tar\.gz$'
         ]
         
         # Safe patterns that look like secrets but aren't
