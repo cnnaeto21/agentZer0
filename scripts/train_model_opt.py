@@ -582,7 +582,21 @@ def main():
         model.save_pretrained(args.output_dir)
         tokenizer.save_pretrained(args.output_dir)
         print(f"LoRA adapters saved to {args.output_dir}")
-        
+
+
+        merged_output_dir = Path(args.output_dir + "_merged")
+        merged_output_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"\nMerging LoRA weights for deployment...")
+        # Merge LoRA into base model
+        from peft import PeftModel
+        merged_model = model.merge_and_unload()
+
+        # Save complete merged model
+        merged_model.save_pretrained(str(merged_output_dir))
+        tokenizer.save_pretrained(str(merged_output_dir))
+        print(f"Merged model saved to {merged_output_dir}")
+        print(f"Use this path for deployment: {merged_output_dir}")        
         # Test inference to verify model health
         inference_ok = test_model_inference(model, tokenizer, device, max_length)
         
