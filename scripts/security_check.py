@@ -42,7 +42,9 @@ class SecurityScanner:
             r'exec[\s\-]+l/',
             r'exec\s+-l',
             r'\.google-cloud-sdk/',
-            r'\.google-cloud-sdk\.tar\.gz$'
+            r'\.google-cloud-sdk\.tar\.gz$',
+            r'google-cloud-sdk/',
+            r'google-cloud-sdk\.tar\.gz$'
         ]
         
         # Safe patterns that look like secrets but aren't
@@ -104,7 +106,7 @@ class SecurityScanner:
         
         for root, dirs, files in os.walk(directory):
             # Skip hidden directories and common excludes
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['__pycache__', 'node_modules', 'venv', 'env', 'exec -l*']]
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['__pycache__', 'node_modules', 'venv', 'env', 'exec -l*', 'google-cloud-sdk', 'google-cloud-sdk.tar.gz']]
             
             for file in files:
                 file_path = Path(root) / file
