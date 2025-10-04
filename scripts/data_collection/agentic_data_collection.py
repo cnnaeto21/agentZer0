@@ -419,10 +419,20 @@ class AgentZeroCollector:
         train, val, test = self.split(df)
         
         # Save
-        print(f"\nPhase 4: Saving")
-        train.to_csv(self.output_dir / "train.csv", index=False)
-        val.to_csv(self.output_dir / "val.csv", index=False)
-        test.to_csv(self.output_dir / "test.csv", index=False)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+
+        # Save timestamped versions
+        train.to_csv(self.output_dir / f"train_{timestamp}.csv", index=False)
+        val.to_csv(self.output_dir / f"val_{timestamp}.csv", index=False)
+        test.to_csv(self.output_dir / f"test_{timestamp}.csv", index=False)
+
+        # Save latest versions (overwrite each time)
+        train.to_csv(self.output_dir / "train_latest.csv", index=False)
+        val.to_csv(self.output_dir / "val_latest.csv", index=False)
+        test.to_csv(self.output_dir / "test_latest.csv", index=False)
+
+        print(f"Saved timestamped: train_{timestamp}.csv, val_{timestamp}.csv, test_{timestamp}.csv")
+        print(f"Saved latest: train_latest.csv, val_latest.csv, test_latest.csv")
         
         print(f"\nDatasets saved to: {self.output_dir}")
         print(f"Ready for training!")

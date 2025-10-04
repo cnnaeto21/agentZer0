@@ -464,6 +464,8 @@ def main():
     parser.add_argument("--learning-rate", type=float, default=2e-4, help="Learning rate (higher for LoRA)")
     parser.add_argument("--force-cpu", action="store_true", help="Force CPU training")
     parser.add_argument("--max-train-samples", type=int, default=1500, help="Max samples per class")
+    parser.add_argument("--model-path", type=str, default=None, 
+                   help="Path to pretrained model to continue training from")
     args = parser.parse_args()
     
     print("LoRA + DistilBERT Prompt Injection Training")
@@ -492,7 +494,15 @@ def main():
     train_df, val_df, test_df = create_balanced_splits(df, args.max_train_samples)
     
     # Create LoRA model
-    model, tokenizer = create_lora_model(args.model_name)
+    if args.model_path:
+        # Continue training from saved model
+        print(f"Loading existing model from {args.model_path}")
+        tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+        model = AutoModelForSequenceClassification.from_pretrained(args.model_path)
+    else:
+        # Start fresh
+        model, tokenizer = create_lora_model(args.model_name)
+    
     model.to(device)
     
     # Clear memory after model loading
