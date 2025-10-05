@@ -596,7 +596,8 @@ def main():
         merged_model.save_pretrained(str(merged_output_dir))
         tokenizer.save_pretrained(str(merged_output_dir))
         print(f"Merged model saved to {merged_output_dir}")
-        print(f"Use this path for deployment: {merged_output_dir}")        
+        print(f"Use this path for deployment: {merged_output_dir}")     
+           
         # Test inference to verify model health
         inference_ok = test_model_inference(model, tokenizer, device, max_length)
         
