@@ -112,3 +112,4 @@ docker-compose.override.yml
 exec -l*
 google-cloud-sdk/
 google-cloud-sdk.tar.gz
+gcp-key.json

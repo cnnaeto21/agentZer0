@@ -1,6 +1,8 @@
 """Shared dependencies for FastAPI endpoints."""
 
 import os
+from dotenv import load_dotenv
+load_dotenv()  # ← ADD THIS
 from functools import lru_cache
 from typing import Optional
 

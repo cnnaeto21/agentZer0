@@ -6,14 +6,13 @@ Startup script for AgentZero API server.
 import sys
 import os
 from pathlib import Path
-
+from dotenv import load_dotenv
+load_dotenv()  # ← ADD THIS
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-# Load .env BEFORE importing anything else
-from dotenv import load_dotenv
-load_dotenv()  # ← ADD THIS
+
 
 import uvicorn
 import argparse
