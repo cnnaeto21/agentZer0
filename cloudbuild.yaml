@@ -1,0 +1,35 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/agentzero-api:latest', '.']
+  
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/agentzero-api:latest']
+  
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'agentzero-api'
+      - '--image=gcr.io/$PROJECT_ID/agentzero-api:latest'
+      - '--region=us-central1'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--memory=4Gi'
+      - '--cpu=2'
+      - '--timeout=900'
+      - '--cpu-boost'
+      - '--no-cpu-throttling'
+      - '--set-env-vars=MODEL_PATH=gs://agentzero-models/models/agentZer0_v2,PROJECT_ID=$PROJECT_ID,MODEL_DEVICE=cpu'
+
+images:
+  - 'gcr.io/$PROJECT_ID/agentzero-api:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'
+
+timeout: '1800s'
